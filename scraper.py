@@ -37,8 +37,19 @@ def extract_shifts():
     
     try:
         driver.get(url)
-        time.sleep(10)  # Wait for JavaScript to load
-        
+        time.sleep(5)  # Initial load
+
+        # Click "next week" button
+        try:
+            next_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 'a[ui-sref*=".({report: nextReport})"]'))
+            )
+            next_button.click()
+            time.sleep(8)  # Wait for the next week to render
+        except Exception as e:
+            logger.warning(f"Couldn't click next week button: {e}")
+            return []
+
         # Save page source for debugging
         with open("page_source.html", "w", encoding="utf-8") as f:
             f.write(driver.page_source)
@@ -52,7 +63,7 @@ def extract_shifts():
             text = header.text.strip()
             if any(day in text for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']):
                 current_day = text
-            elif current_day and text:  # This would be the date part (e.g., "10th Mar")
+            elif current_day and text:
                 match = re.search(r'(\d+)(?:st|nd|rd|th)\s+([A-Za-z]+)', text)
                 if match:
                     day = int(match.group(1))
@@ -70,37 +81,30 @@ def extract_shifts():
         
         for row in rows:
             if "Cristian Rus" in row.text:
-                # Get all cells for the week, not just those with shifts
                 cells = row.find_elements(By.CSS_SELECTOR, "td")
                 day_index = 0
                 
                 for cell in cells:
-                    # Skip the first cell which contains the name
                     if day_index == 0:
                         day_index += 1
                         continue
                         
-                    # Adjust day_index since we skipped the first cell
                     current_day_index = day_index - 1
                     if current_day_index >= len(dates):
                         break
                         
                     day_name = list(dates.keys())[current_day_index]
                     day_num, month = dates[day_name]
-                    year = 2025  # From the HTML we can see it's 2025
+                    year = 2025
                     
-                    # Look for shift information within the cell
                     shift_div = cell.find_elements(By.CSS_SELECTOR, "div.week-shift")
                     if shift_div:
                         shift_text = shift_div[0].get_attribute("uib-tooltip-html")
                         if shift_text:
-                            # Extract role and time
                             match = re.search(r"'FOH - (.+)'", shift_text)
                             if match:
                                 time_text = match.group(1)
                                 role = ""
-                                
-                                # Check for role in the cell text
                                 role_divs = shift_div[0].find_elements(By.CSS_SELECTOR, "div.shift-jobs")
                                 if role_divs:
                                     role = role_divs[0].text
@@ -134,40 +138,32 @@ def create_ics(shifts):
         
         try:
             day, month, year = map(int, date.split('/'))
-            
-            # Create datetime objects
             start_dt = datetime.datetime.strptime(f"{day:02d}/{month:02d}/{year} {start_time}", "%d/%m/%Y %I:%M%p")
             end_dt = datetime.datetime.strptime(f"{day:02d}/{month:02d}/{year} {end_time}", "%d/%m/%Y %I:%M%p")
             
-            # Handle overnight shifts
             if end_dt < start_dt:
                 end_dt += datetime.timedelta(days=1)
             
-            # Convert to UTC
             start_dt_local = nz_tz.localize(start_dt)
             end_dt_local = nz_tz.localize(end_dt)
             start_dt_utc = start_dt_local.astimezone(pytz.UTC)
             end_dt_utc = end_dt_local.astimezone(pytz.UTC)
             
-            # Create event
             event = Event()
             event.name = f"Chouchou" + (f" ({role})" if role else "")
             event.begin = start_dt_utc
             event.end = end_dt_utc
             event.description = f"Work shift at Loaded" + (f"\nRole: {role}" if role else "")
-            
             event.location = "Chouchou\n1 Taranaki Street, Te Aro, Wellington, 6011"
             cal.events.add(event)
             
         except ValueError as e:
             print(f"Error parsing shift: {shift} - {e}")
     
-    # Write to ICS file
     with open("roster.ics", "w") as f:
         f.write(str(cal))
 
 def create_text_summary(shifts):
-    # Create a text summary
     with open("roster_summary.txt", "w") as f:
         for shift in shifts:
             f.write(f"Date: {shift['day_name']}, {shift['date']}\n")
